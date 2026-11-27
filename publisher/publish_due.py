@@ -4,7 +4,7 @@ GitHub Actions 上で動く公開係（Macが閉じていても、予約時刻�
 
 リポジトリの中身:
   queue/<slug>.json    予約（原稿・時刻・ファイルのsha256）。Macが書く
-  media/<slug>/        公開する画像（JPEG）または reel.mp4。公開後に消して、履歴からも消す
+  media/<slug>/        公開する画像（JPEG）または reel.mp4。公開後に消す（変更履歴には残る）
   status/<slug>.json   結果と進行状況。このスクリプトが書く
 
 守ること:
@@ -61,26 +61,18 @@ def sync():
     git("clean", "-fdq")
 
 
-def commit_change(change, message, squash=False):
+def commit_change(change, message):
     """最新を取り込んで change() を適用して push。ほかの更新とぶつかったらやり直す。
-    squash=True は、消した画像が履歴に残らないよう、いまの中身だけの1コミットに作り直す"""
+    履歴は作り直さない（作り直すと、定期実行の設定の持ち主が書き換わり、自動起動が止まるため）"""
     for attempt in range(6):
         sync()
-        base = git("rev-parse", "HEAD")
         change()
         git("add", "-A")
-        if squash:
-            tree = git("write-tree")
-            commit = git("commit-tree", tree, "-m", message)
-            push = ["push", "--quiet", f"--force-with-lease=main:{base}", "origin", f"{commit}:main"]
-        else:
-            if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode == 0:
-                return
-            git("commit", "--quiet", "-m", message)
-            push = ["push", "--quiet", "origin", "HEAD:main"]
+        if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=ROOT).returncode == 0:
+            return
+        git("commit", "--quiet", "-m", message)
         try:
-            git(*push)
-            sync()
+            git("push", "--quiet", "origin", "HEAD:main")
             return
         except subprocess.CalledProcessError as e:
             log(f"push やり直し {attempt + 1}: {e.stderr.strip()[-200:]}")
@@ -107,12 +99,12 @@ def set_status(slug, **data):
 
 
 def finish(slug, stage, **extra):
-    """結果を残して、予約と画像を消す（履歴からも消す）"""
+    """結果を残して、予約と画像を消す"""
     def change():
         write_status(slug, {**status_of(slug), "stage": stage, "updated_at": now().isoformat(timespec="seconds"), **extra})
         (ROOT / "queue" / f"{slug}.json").unlink(missing_ok=True)
         shutil.rmtree(ROOT / "media" / slug, ignore_errors=True)
-    commit_change(change, f"{stage}: {slug}", squash=True)
+    commit_change(change, f"{stage}: {slug}")
 
 
 def notify(title, message, priority=3, click=None):
